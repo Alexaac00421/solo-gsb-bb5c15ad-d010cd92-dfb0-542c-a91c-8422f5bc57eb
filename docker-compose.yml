@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # 是否开放注册（首个账号不受限），生产环境建议 false 并预先创建账号
+      ALLOW_REGISTRATION: "true"
+      # 上传大小上限（MB）
+      MAX_UPLOAD_MB: "100"
+      # 会话有效期（小时）
+      SESSION_TTL_HOURS: "72"
+    volumes:
+      - app_data:/data
+    restart: unless-stopped
+
+volumes:
+  app_data:
