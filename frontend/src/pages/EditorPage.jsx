@@ -159,6 +159,9 @@ export default function EditorPage() {
           <button className="btn btn-primary btn-small" disabled={!!busy} onClick={onPublish}>
             发布
           </button>
+          <Link className="btn btn-small" to={`/documents/${id}/versions`}>
+            历史版本
+          </Link>
         </div>
       </div>
 
@@ -167,10 +170,11 @@ export default function EditorPage() {
       {notice && <div className="alert alert-ok">{notice}</div>}
       {(published || doc.share_token) && (
         <div className="alert alert-ok">
-          已发布，分享链接（仅可下载脱敏版）：
+          已发布（当前第 {published ? published.current_version_no : doc.current_version_no} 版），主分享链接始终指向最近一次成功发布（仅可下载脱敏版）：
           <a href={shareUrl(published ? published.share_token : doc.share_token)} target="_blank" rel="noreferrer">
             {shareUrl(published ? published.share_token : doc.share_token)}
           </a>
+          {' '}· <Link to={`/documents/${id}/versions`}>查看 / 分享历史版本</Link>
         </div>
       )}
 

@@ -16,6 +16,8 @@ docker compose up --build
 
 首次使用请注册账号（默认开放注册）。上传 PDF → 进入"编辑遮盖"框选区域 → 保存草稿 / 预览 → 发布 → 复制分享链接。
 
+每次**成功发布**都会生成一个不可修改的递增版本（第 1、2、3… 版），留存发布时间、遮盖选区快照与脱敏成品 PDF。在文档列表或编辑器中点击「历史版本」即可查看版本记录、下载任一历史版本，并为指定版本取得**独立固定分享链接**（内容永久锁定为该版本，后续重发不改变）。
+
 本地开发（可选）：
 
 ```bash
@@ -56,6 +58,55 @@ cd backend && python -m pytest tests/
   - 写出采用临时文件 + 原子替换，导出失败不会破坏原件、草稿或已发布版本。
 - **输入校验**：越界选区、加密（含空密码加密）或损坏的 PDF 一律拒绝，且不会覆盖已有草稿。
 - **权限**：只有文档创建者（登录后）可下载原件与执行编辑/发布；持分享链接的访问者只能下载已发布的脱敏版，无需登录。
+- **版本记录**：同一文档每次成功发布形成不可改的递增版本，留存发布时间、遮盖选区快照与成品 PDF；只有创建者可查看版本、下载历史版本或签发固定链接。
+- **链接语义**：文档主分享链接与「下载脱敏版」始终指向最近一次成功发布版；为指定历史版本签发的独立链接永久固定于该版本，后续重发不会改变其内容。
+- **并发与失败**：并发发布产生不同版本号，当前版本只指向最后成功提交者；选区校验、导出或写入失败不留可见半成品版本，也不改变当前版本与已有链接（草稿失败处理规则保持不变）。版本文件缺失一律报错，不会回退到其他版本。
+- **删除**：删除文档后全部版本文件被清理，所有主/历史版本分享链接立即失效。
+
+## HTTP API（版本管理）
+
+除页面操作外，版本相关能力也可经 HTTP API 调用（登录态使用同名 Cookie `redact_session`，与浏览器一致）。
+
+```bash
+BASE=http://localhost:8000
+
+# 登录（保存 Cookie）
+curl -c cookies.txt -X POST $BASE/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"secret123"}'
+
+# 发布（成功即生成一个不可变的新版本，返回 current_version_no）
+curl -b cookies.txt -X POST $BASE/api/documents/$DOC_ID/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"boxes":[{"page":0,"x0":60,"y0":670,"x1":300,"y1":710}]}'
+
+# 查看版本记录（仅创建者）
+curl -b cookies.txt $BASE/api/documents/$DOC_ID/versions
+
+# 查看某一版本的遮盖选区快照（仅创建者）
+curl -b cookies.txt $BASE/api/documents/$DOC_ID/versions/1
+
+# 下载某一历史版本脱敏成品（仅创建者；文件缺失返回 500，不回退）
+curl -b cookies.txt -OJ $BASE/api/documents/$DOC_ID/versions/1/file
+
+# 为指定版本取得独立固定分享链接（幂等：重复调用返回同一 token）
+curl -b cookies.txt -X POST $BASE/api/documents/$DOC_ID/versions/1/share
+# => {"version_no":1,"share_token":"...."}
+
+# 持固定链接的任何人无需登录，只能下载该版脱敏成品，内容不随后续重发改变
+curl -OJ $BASE/api/share/<VERSION_TOKEN>
+curl $BASE/api/share/<VERSION_TOKEN>/info
+# => {"filename":"doc.pdf","published_at":"…","version_no":1,"pinned":true}
+
+# 主分享链接（pinned=false）始终指向当前最新成功发布版
+curl $BASE/api/share/<MAIN_TOKEN>/info
+# => {"filename":"doc.pdf","published_at":"…","version_no":3,"pinned":false}
+
+# 删除文档：清理全部版本文件，主链接与所有固定链接随即 404
+curl -b cookies.txt -X DELETE $BASE/api/documents/$DOC_ID
+```
+
+页面入口：登录后在文档列表点击「历史版本」，或在编辑器顶部点击「历史版本」。
 
 ## 访问地址
 
@@ -81,5 +132,5 @@ cd backend && python -m pytest tests/
 └── frontend/
     └── src/
         ├── components/PdfViewer.jsx  # 页面渲染 + 框选层（缩放/旋转坐标映射）
-        └── pages/                    # 登录、文档列表、编辑器、分享下载页
+        └── pages/                    # 登录、文档列表、编辑器、版本记录、分享下载页
 ```

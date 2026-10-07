@@ -21,8 +21,14 @@ export default function SharePage() {
             <p>
               文件：<strong>{info.filename}</strong>
             </p>
+            {info.version_no != null && (
+              <p className="muted">
+                版本：第 {info.version_no} 版
+                {info.pinned ? '（固定版本，后续重发不改变本链接内容）' : '（文档最新发布版）'}
+              </p>
+            )}
             <p className="muted">发布时间：{info.published_at}</p>
-            <p className="muted">该链接仅提供已发布的脱敏版本。</p>
+            <p className="muted">该链接仅提供对应版本的脱敏成品。</p>
             <a className="btn btn-primary" href={`/api/share/${token}`}>
               下载脱敏 PDF
             </a>

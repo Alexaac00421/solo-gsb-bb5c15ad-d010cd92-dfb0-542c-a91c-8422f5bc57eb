@@ -113,6 +113,9 @@ export default function DocumentsPage() {
                       <button className="btn btn-small" onClick={() => copyShare(doc)}>
                         复制分享链接
                       </button>
+                      <Link className="btn btn-small" to={`/documents/${doc.id}/versions`}>
+                        历史版本
+                      </Link>
                     </>
                   )}
                   <button className="btn btn-small btn-danger" onClick={() => onDelete(doc)}>

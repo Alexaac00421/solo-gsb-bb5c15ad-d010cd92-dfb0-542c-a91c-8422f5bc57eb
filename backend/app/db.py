@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS documents (
     share_token TEXT UNIQUE,
     published_path TEXT,
     published_at TEXT,
+    current_version_no INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -35,6 +36,16 @@ CREATE TABLE IF NOT EXISTS drafts (
     boxes_json TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS versions (
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    version_no INTEGER NOT NULL,
+    boxes_json TEXT NOT NULL,
+    pdf_path TEXT NOT NULL,
+    share_token TEXT UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (document_id, version_no)
+);
+CREATE INDEX IF NOT EXISTS idx_versions_document ON versions(document_id, version_no);
 """
 
 
@@ -42,6 +53,48 @@ def init_db() -> None:
     config.ensure_dirs()
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate_schema(conn)
+
+
+def _migrate_schema(conn) -> None:
+    """旧库升级：补列，并把旧版“已发布单文件”回填为不可变的第 1 版。
+
+    documents.share_token 始终表示“当前版本链接”（重发后仍指向最新版）；
+    versions.share_token 表示某一历史版本的独立固定链接。回填时第 1 版
+    不另发固定链接，因此置 NULL。
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
+    if "current_version_no" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN current_version_no INTEGER")
+
+    existing = {
+        (r["document_id"], r["version_no"])
+        for r in conn.execute("SELECT document_id, version_no FROM versions")
+    }
+    old_published = conn.execute(
+        """SELECT id, published_path, published_at FROM documents
+           WHERE status = 'published' AND published_path IS NOT NULL"""
+    ).fetchall()
+    for row in old_published:
+        if (row["id"], 1) in existing:
+            continue
+        created = row["published_at"] or _utc_now()
+        conn.execute(
+            """INSERT INTO versions
+                   (document_id, version_no, boxes_json, pdf_path, share_token, created_at)
+               VALUES (?, 1, '[]', ?, NULL, ?)""",
+            (row["id"], row["published_path"], created),
+        )
+        conn.execute(
+            "UPDATE documents SET current_version_no = 1 WHERE id = ? AND current_version_no IS NULL",
+            (row["id"],),
+        )
+
+
+def _utc_now() -> str:
+    import datetime as _dt
+
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @contextmanager
@@ -139,18 +192,72 @@ def touch_document(conn, doc_id: str) -> None:
     conn.execute("UPDATE documents SET updated_at = datetime('now') WHERE id = ?", (doc_id,))
 
 
-def mark_published(conn, doc_id: str, share_token: str, published_path: str) -> None:
+def insert_version(
+    conn,
+    doc_id: str,
+    version_no: int,
+    boxes_json: str,
+    pdf_path: str,
+    created_at: str,
+) -> None:
+    """写入一条不可变版本记录（须在持有写锁、已确定 version_no 后调用）。"""
+    conn.execute(
+        """INSERT INTO versions
+               (document_id, version_no, boxes_json, pdf_path, share_token, created_at)
+           VALUES (?, ?, ?, ?, NULL, ?)""",
+        (doc_id, version_no, boxes_json, pdf_path, created_at),
+    )
+
+
+def mark_current_version(
+    conn, doc_id: str, share_token: str, pdf_path: str, version_no: int, created_at: str
+) -> None:
+    """把当前版本指针指向新成功发布的版本。文档级分享链接保持不变（首发后）。"""
     conn.execute(
         """UPDATE documents
            SET status = 'published', share_token = ?, published_path = ?,
-               published_at = datetime('now'), updated_at = datetime('now')
+               published_at = ?, current_version_no = ?, updated_at = datetime('now')
            WHERE id = ?""",
-        (share_token, published_path, doc_id),
+        (share_token, pdf_path, created_at, version_no, doc_id),
     )
+
+
+def list_version_paths(conn, doc_id: str):
+    return conn.execute(
+        "SELECT pdf_path FROM versions WHERE document_id = ?", (doc_id,)
+    ).fetchall()
 
 
 def delete_document(conn, doc_id: str) -> None:
     conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+
+
+# ---------- versions ----------
+
+def list_versions(conn, doc_id: str):
+    return conn.execute(
+        """SELECT document_id, version_no, boxes_json, pdf_path, share_token, created_at
+           FROM versions WHERE document_id = ? ORDER BY version_no DESC""",
+        (doc_id,),
+    ).fetchall()
+
+
+def get_version(conn, doc_id: str, version_no: int):
+    return conn.execute(
+        "SELECT * FROM versions WHERE document_id = ? AND version_no = ?",
+        (doc_id, version_no),
+    ).fetchone()
+
+
+def get_version_by_share(conn, token: str):
+    return conn.execute("SELECT * FROM versions WHERE share_token = ?", (token,)).fetchone()
+
+
+def set_version_share(conn, doc_id: str, version_no: int, token: str) -> None:
+    conn.execute(
+        "UPDATE versions SET share_token = ? WHERE document_id = ? AND version_no = ?",
+        (token, doc_id, version_no),
+    )
 
 
 # ---------- drafts ----------

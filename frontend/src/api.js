@@ -45,6 +45,11 @@ export const api = {
     request(`/api/documents/${id}/preview`, { method: 'POST', body: JSON.stringify({ boxes }) }).then((r) => r.blob()),
   publish: (id, boxes) =>
     request(`/api/documents/${id}/publish`, { method: 'POST', body: JSON.stringify({ boxes }) }).then(json),
+  listVersions: (id) => request(`/api/documents/${id}/versions`).then(json),
+  getVersion: (id, versionNo) =>
+    request(`/api/documents/${id}/versions/${versionNo}`).then(json),
+  createVersionShare: (id, versionNo) =>
+    request(`/api/documents/${id}/versions/${versionNo}/share`, { method: 'POST' }).then(json),
   shareInfo: (token) => request(`/api/share/${token}/info`).then(json),
 };
 

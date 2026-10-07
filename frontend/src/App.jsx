@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage.jsx';
 import DocumentsPage from './pages/DocumentsPage.jsx';
 import EditorPage from './pages/EditorPage.jsx';
 import SharePage from './pages/SharePage.jsx';
+import VersionsPage from './pages/VersionsPage.jsx';
 
 const AuthContext = createContext(null);
 
@@ -91,6 +92,14 @@ export default function App() {
             element={
               <RequireAuth>
                 <EditorPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/documents/:id/versions"
+            element={
+              <RequireAuth>
+                <VersionsPage />
               </RequireAuth>
             }
           />

@@ -215,3 +215,248 @@ class TestDocuments:
             json={"boxes": [{"page": 0, "x0": 0, "y0": 0, "x1": 99999, "y1": 10}]},
         )
         assert r.status_code == 400
+
+
+class TestVersions:
+    def _publish(self, client, doc_id, page=0, x0=60):
+        boxes = {"boxes": [{"page": page, "x0": x0, "y0": 670, "x1": x0 + 240, "y1": 710}]}
+        r = client.post(f"/api/documents/{doc_id}/publish", json=boxes)
+        assert r.status_code == 200, r.text
+        return r, boxes["boxes"]
+
+    def test_incremental_immutable_versions(self, client, sample_pdf):
+        _register(client)
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        r1, b1 = self._publish(client, doc_id, page=0)
+        assert r1.json()["current_version_no"] == 1
+        r2, b2 = self._publish(client, doc_id, page=1)
+        assert r2.json()["current_version_no"] == 2
+        # 文档主分享链接两次发布保持不变
+        assert r1.json()["share_token"] == r2.json()["share_token"]
+        main_token = r2.json()["share_token"]
+
+        listing = client.get(f"/api/documents/{doc_id}/versions").json()
+        assert listing["current_version_no"] == 2
+        assert [v["version_no"] for v in listing["versions"]] == [2, 1]
+        assert listing["versions"][0]["is_current"] is True
+        assert listing["versions"][1]["is_current"] is False
+
+        # 选区快照按版本留存
+        d1 = client.get(f"/api/documents/{doc_id}/versions/1").json()
+        d2 = client.get(f"/api/documents/{doc_id}/versions/2").json()
+        assert d1["boxes"] == b1 and d2["boxes"] == b2
+        assert d1["boxes"] != d2["boxes"]
+
+        # 主链接/已发布下载始终指向最新成功版
+        anon = TestClient(app)
+        latest = anon.get(f"/api/share/{main_token}").content
+        p = pymupdf.open(stream=latest, filetype="pdf")
+        assert "SECRET-PAGE1-ROTATED" not in p[1].get_text()  # v2 遮盖第 2 页
+        assert "SECRET-PAGE0-TEXT" in p[0].get_text()        # v2 没遮盖第 1 页
+        p.close()
+        assert client.get(f"/api/documents/{doc_id}/published").content == latest
+
+        # 创建者可下载任一历史版本，旧版内容不变
+        v1_bytes = client.get(f"/api/documents/{doc_id}/versions/1/file").content
+        p = pymupdf.open(stream=v1_bytes, filetype="pdf")
+        assert "SECRET-PAGE0-TEXT" not in p[0].get_text()    # v1 遮盖第 1 页
+        assert "SECRET-PAGE1-ROTATED" in p[1].get_text()
+        p.close()
+
+    def test_pinned_version_share_is_fixed(self, client, sample_pdf):
+        _register(client)
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        self._publish(client, doc_id, page=0)
+        self._publish(client, doc_id, page=1)
+
+        # 为第 1 版取得独立分享链接（无需登录即可下载）
+        r = client.post(f"/api/documents/{doc_id}/versions/1/share")
+        assert r.status_code == 200
+        pin_token = r.json()["share_token"]
+        assert r.json()["version_no"] == 1
+        # 重复签发返回同一链接
+        assert client.post(f"/api/documents/{doc_id}/versions/1/share").json()["share_token"] == pin_token
+        # 固定链接与主链接是不同令牌
+        main_token = client.get(f"/api/documents/{doc_id}").json()["share_token"]
+        assert pin_token != main_token
+
+        anon = TestClient(app)
+        v1_bytes = anon.get(f"/api/share/{pin_token}").content
+        info = anon.get(f"/api/share/{pin_token}/info").json()
+        assert info["version_no"] == 1 and info["pinned"] is True
+        main_info = anon.get(f"/api/share/{main_token}/info").json()
+        assert main_info["version_no"] == 2 and main_info["pinned"] is False
+
+        # 再发第 3 版：固定链接内容不变，主链接跟随到第 3 版
+        self._publish(client, doc_id, page=0, x0=100)
+        assert anon.get(f"/api/share/{pin_token}").content == v1_bytes
+        assert anon.get(f"/api/share/{main_token}").content != v1_bytes
+        assert anon.get(f"/api/share/{main_token}/info").json()["version_no"] == 3
+
+    def test_failed_publish_leaves_no_half_version(self, client, sample_pdf, monkeypatch):
+        from app import pdfcore
+        from app.routes import documents as doc_routes
+
+        _register(client)
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        self._publish(client, doc_id, page=0)
+        main_token = client.get(f"/api/documents/{doc_id}").json()["share_token"]
+        first = client.get(f"/api/documents/{doc_id}/published").content
+
+        # 导出失败：不产生新版本，当前版本与链接不变
+        def boom(*a, **k):
+            raise pdfcore.PdfExportError("生成脱敏 PDF 失败")
+
+        monkeypatch.setattr(doc_routes.pdfcore, "build_redacted_pdf", boom)
+        r = client.post(
+            f"/api/documents/{doc_id}/publish",
+            json={"boxes": [{"page": 1, "x0": 60, "y0": 670, "x1": 300, "y1": 710}]},
+        )
+        assert r.status_code == 500
+        versions = client.get(f"/api/documents/{doc_id}/versions").json()["versions"]
+        assert [v["version_no"] for v in versions] == [1]
+        doc = client.get(f"/api/documents/{doc_id}").json()
+        assert doc["current_version_no"] == 1
+        assert TestClient(app).get(f"/api/share/{main_token}").content == first
+
+        # 选区校验失败：同样不留版本
+        monkeypatch.undo()
+        r = client.post(
+            f"/api/documents/{doc_id}/publish",
+            json={"boxes": [{"page": 0, "x0": 0, "y0": 0, "x1": 99999, "y1": 10}]},
+        )
+        assert r.status_code == 400
+        assert [v["version_no"] for v in client.get(f"/api/documents/{doc_id}/versions").json()["versions"]] == [1]
+
+    def test_missing_version_file_errors_not_fallback(self, client, sample_pdf):
+        import os
+        from pathlib import Path
+        from app import config
+
+        _register(client)
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        self._publish(client, doc_id, page=0)
+        self._publish(client, doc_id, page=1)
+        pin = client.post(f"/api/documents/{doc_id}/versions/1/share").json()["share_token"]
+
+        v1 = next(p for p in Path(config.PUBLISHED_DIR).glob(f"{doc_id}-v1.pdf"))
+        v1.unlink()
+        os.sync()
+
+        # 持第 1 版固定链接：文件缺失报错，不回退到第 2 版
+        assert TestClient(app).get(f"/api/share/{pin}").status_code == 500
+        # 创建者下载该版同样报错
+        assert client.get(f"/api/documents/{doc_id}/versions/1/file").status_code == 500
+        # 无法为缺文件的版本签发链接
+        assert client.post(f"/api/documents/{doc_id}/versions/1/share").status_code == 500
+        # 第 2 版（当前版本）仍正常
+        assert client.get(f"/api/documents/{doc_id}/versions/2/file").status_code == 200
+
+    def test_write_failure_leaves_no_half_version(self, client, sample_pdf, monkeypatch):
+        from app.routes import documents as doc_routes
+
+        _register(client)
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        self._publish(client, doc_id, page=0)
+        first = client.get(f"/api/documents/{doc_id}/published").content
+
+        real_replace = doc_routes.os.replace
+
+        def fail_once(src, dst):
+            if str(dst).endswith(".pdf") and "-v2" in str(dst):
+                raise OSError("disk full")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(doc_routes.os, "replace", fail_once)
+        r = client.post(
+            f"/api/documents/{doc_id}/publish",
+            json={"boxes": [{"page": 1, "x0": 60, "y0": 670, "x1": 300, "y1": 710}]},
+        )
+        assert r.status_code == 500
+        monkeypatch.undo()
+        # 无 v2 版本，当前仍为 v1，链接内容不变
+        versions = client.get(f"/api/documents/{doc_id}/versions").json()
+        assert [v["version_no"] for v in versions["versions"]] == [1]
+        assert client.get(f"/api/documents/{doc_id}").json()["current_version_no"] == 1
+        assert client.get(f"/api/documents/{doc_id}/published").content == first
+
+    def test_other_account_cannot_access_versions(self, client, sample_pdf):
+        _register(client, "alice", "secret123")
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        self._publish(client, doc_id, page=0)
+        pin = client.post(f"/api/documents/{doc_id}/versions/1/share").json()["share_token"]
+        client.post("/api/auth/logout")
+        _register(client, "bob", "secret456")
+        for method, path in [
+            ("get", f"/api/documents/{doc_id}/versions"),
+            ("get", f"/api/documents/{doc_id}/versions/1"),
+            ("get", f"/api/documents/{doc_id}/versions/1/file"),
+            ("post", f"/api/documents/{doc_id}/versions/1/share"),
+        ]:
+            r = getattr(client, method)(path)
+            assert r.status_code == 404, (method, path, r.status_code)
+        # 但固定版本链接任何人可下载脱敏成品
+        assert TestClient(app).get(f"/api/share/{pin}").status_code == 200
+
+    def test_delete_document_invalidates_all_links_and_files(self, client, sample_pdf):
+        from pathlib import Path
+        from app import config
+
+        _register(client)
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        self._publish(client, doc_id, page=0)
+        self._publish(client, doc_id, page=1)
+        main_token = client.get(f"/api/documents/{doc_id}").json()["share_token"]
+        pin1 = client.post(f"/api/documents/{doc_id}/versions/1/share").json()["share_token"]
+        pin2 = client.post(f"/api/documents/{doc_id}/versions/2/share").json()["share_token"]
+
+        files = list(Path(config.PUBLISHED_DIR).glob(f"{doc_id}-v*.pdf"))
+        assert len(files) == 2
+        assert client.delete(f"/api/documents/{doc_id}").status_code == 200
+
+        anon = TestClient(app)
+        for token in (main_token, pin1, pin2):
+            assert anon.get(f"/api/share/{token}").status_code == 404
+            assert anon.get(f"/api/share/{token}/info").status_code == 404
+        assert all(not p.exists() for p in files)
+
+    def test_concurrent_publish_gets_distinct_versions(self, client, sample_pdf):
+        import threading
+
+        _register(client)
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        box = {"boxes": [{"page": 0, "x0": 60, "y0": 670, "x1": 300, "y1": 710}]}
+        results = []
+        errors = []
+        lock = threading.Lock()
+
+        def fire():
+            c = TestClient(app)
+            r = c.post("/api/auth/login", json={"username": "alice", "password": "secret123"})
+            assert r.status_code == 200
+            resp = c.post(f"/api/documents/{doc_id}/publish", json=box)
+            with lock:
+                if resp.status_code == 200:
+                    results.append(resp.json()["current_version_no"])
+                else:
+                    errors.append(resp.status_code)
+
+        threads = [threading.Thread(target=fire) for _ in range(4)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        # 成功提交的版本号互不相同
+        assert not errors, errors
+        assert sorted(results) == [1, 2, 3, 4]
+        listing = client.get(f"/api/documents/{doc_id}/versions").json()
+        assert listing["current_version_no"] == max(results)
+        assert len(listing["versions"]) == 4
+
+    def test_publish_response_keeps_compatible_fields(self, client, sample_pdf):
+        _register(client)
+        doc_id = _upload(client, sample_pdf).json()["id"]
+        r, _ = self._publish(client, doc_id)
+        body = r.json()
+        for field in ("id", "filename", "page_count", "status", "share_token",
+                      "published_at", "created_at", "updated_at", "current_version_no"):
+            assert field in body
+        assert body["status"] == "published"
