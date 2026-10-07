@@ -354,6 +354,10 @@ input:focus {
   touch-action: none;
 }
 
+.overlay-readonly {
+  cursor: default;
+}
+
 .redact-box {
   position: absolute;
   background: rgba(10, 10, 10, 0.82);
@@ -365,6 +369,15 @@ input:focus {
   background: rgba(224, 36, 36, 0.55);
 }
 
+.redact-box-fixed {
+  cursor: default;
+  border-color: #1a56db;
+}
+
+.redact-box-fixed:hover {
+  background: rgba(10, 10, 10, 0.82);
+}
+
 .redact-box-draft {
   background: rgba(224, 36, 36, 0.3);
   border: 1.5px dashed #e02424;
@@ -374,4 +387,47 @@ input:focus {
 .page-label {
   color: var(--muted);
   font-size: 13px;
+}
+
+/* 历史版本 */
+.versions {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 24px;
+}
+
+.versions-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.version-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.version-table th,
+.version-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-size: 13px;
+}
+
+.version-table th {
+  background: #f0f3f8;
+  font-weight: 600;
+}
+
+.version-table .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.version-table tr.row-active {
+  background: #eaf1fe;
 }

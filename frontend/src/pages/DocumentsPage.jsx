@@ -108,11 +108,14 @@ export default function DocumentsPage() {
                   {doc.status === 'published' && (
                     <>
                       <a className="btn btn-small" href={`/api/documents/${doc.id}/published`}>
-                        下载脱敏版
+                        下载最新脱敏版
                       </a>
                       <button className="btn btn-small" onClick={() => copyShare(doc)}>
                         复制分享链接
                       </button>
+                      <Link className="btn btn-small" to={`/edit/${doc.id}#versions`}>
+                        历史版本
+                      </Link>
                     </>
                   )}
                   <button className="btn btn-small btn-danger" onClick={() => onDelete(doc)}>

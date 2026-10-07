@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react';
  * 绘制与回显都通过当前 viewport 双向转换（convertToPdfPoint /
  * convertToViewportPoint），因此无论视图缩放还是旋转，选区始终对应原页位置。
  */
-function PageView({ pdfDoc, pageIndex, scale, viewRotation, boxes, onAddBox, onDeleteBox }) {
+function PageView({ pdfDoc, pageIndex, scale, viewRotation, boxes, onAddBox, onDeleteBox, readOnly }) {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
@@ -80,6 +80,7 @@ function PageView({ pdfDoc, pageIndex, scale, viewRotation, boxes, onAddBox, onD
   };
 
   const onPointerDown = (e) => {
+    if (readOnly) return;
     if (e.button !== 0) return;
     e.preventDefault();
     overlayRef.current.setPointerCapture(e.pointerId);
@@ -124,7 +125,7 @@ function PageView({ pdfDoc, pageIndex, scale, viewRotation, boxes, onAddBox, onD
         <canvas ref={canvasRef} />
         <div
           ref={overlayRef}
-          className="overlay"
+          className={`overlay${readOnly ? ' overlay-readonly' : ''}`}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -139,13 +140,13 @@ function PageView({ pdfDoc, pageIndex, scale, viewRotation, boxes, onAddBox, onD
               return (
                 <div
                   key={box.id}
-                  className="redact-box"
+                  className={`redact-box${readOnly ? ' redact-box-fixed' : ''}`}
                   style={{ left, top, width: Math.abs(ax - bx), height: Math.abs(ay - by) }}
-                  title="点击删除该遮盖框"
+                  title={readOnly ? '发布时保存的遮盖选区' : '点击删除该遮盖框'}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onDeleteBox(box.id);
+                    if (!readOnly) onDeleteBox(box.id);
                   }}
                 />
               );
@@ -168,7 +169,7 @@ function PageView({ pdfDoc, pageIndex, scale, viewRotation, boxes, onAddBox, onD
   );
 }
 
-export default function PdfViewer({ pdfDoc, numPages, scale, viewRotation, boxes, onAddBox, onDeleteBox }) {
+export default function PdfViewer({ pdfDoc, numPages, scale, viewRotation, boxes, onAddBox, onDeleteBox, readOnly = false }) {
   const pages = Array.from({ length: numPages }, (_, i) => i);
   return (
     <div className="pdf-viewer">
@@ -182,6 +183,7 @@ export default function PdfViewer({ pdfDoc, numPages, scale, viewRotation, boxes
           boxes={boxes.filter((b) => b.page === pageIndex)}
           onAddBox={onAddBox}
           onDeleteBox={onDeleteBox}
+          readOnly={readOnly}
         />
       ))}
     </div>

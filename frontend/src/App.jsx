@@ -95,6 +95,7 @@ export default function App() {
             }
           />
           <Route path="/share/:token" element={<SharePage />} />
+          <Route path="/share/v/:vToken" element={<SharePage />} />
           <Route path="*" element={<div className="page-center">页面不存在</div>} />
         </Routes>
       </main>

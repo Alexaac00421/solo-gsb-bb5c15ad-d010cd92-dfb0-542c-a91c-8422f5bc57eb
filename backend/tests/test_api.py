@@ -8,12 +8,6 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-@pytest.fixture()
-def client():
-    with TestClient(app) as c:
-        yield c
-
-
 def _register(client, username="alice", password="secret123"):
     r = client.post("/api/auth/register", json={"username": username, "password": password})
     assert r.status_code == 200, r.text

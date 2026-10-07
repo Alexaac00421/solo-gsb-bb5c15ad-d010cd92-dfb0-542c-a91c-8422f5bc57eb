@@ -45,9 +45,24 @@ export const api = {
     request(`/api/documents/${id}/preview`, { method: 'POST', body: JSON.stringify({ boxes }) }).then((r) => r.blob()),
   publish: (id, boxes) =>
     request(`/api/documents/${id}/publish`, { method: 'POST', body: JSON.stringify({ boxes }) }).then(json),
+  listVersions: (id) => request(`/api/documents/${id}/versions`).then(json),
+  getVersion: (id, version) =>
+    request(`/api/documents/${id}/versions/${version}`).then(json),
+  createVersionShare: (id, version) =>
+    request(`/api/documents/${id}/versions/${version}/share`, { method: 'POST' }).then(json),
+  versionDownloadUrl: (id, version) => `/api/documents/${id}/versions/${version}/download`,
   shareInfo: (token) => request(`/api/share/${token}/info`).then(json),
+  versionShareInfo: (token) => request(`/api/share/v/${token}/info`).then(json),
 };
 
 export function shareUrl(token) {
   return `${window.location.origin}/share/${token}`;
+}
+
+export function versionShareUrl(token) {
+  return `${window.location.origin}/share/v/${token}`;
+}
+
+export function versionShareApiUrl(token) {
+  return `${window.location.origin}/api/share/v/${token}`;
 }
